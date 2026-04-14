@@ -1,0 +1,8 @@
+# Force the real Apple clang as the linker. The user's PATH has a custom
+# `~/bin/cc` shim that doesn't act like a C compiler, which breaks Rust's
+# default linker invocation.
+[target.aarch64-apple-darwin]
+linker = "/usr/bin/cc"
+
+[target.x86_64-apple-darwin]
+linker = "/usr/bin/cc"
