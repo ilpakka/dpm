@@ -14,8 +14,8 @@ import (
 	pgpopenpgp "github.com/ProtonMail/go-crypto/openpgp"
 	pgparmor "github.com/ProtonMail/go-crypto/openpgp/armor"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 // HTTPBackend downloads a static binary or archive from a URL and verifies

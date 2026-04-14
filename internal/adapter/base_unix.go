@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 func newBaseAdapter(platform catalog.Platform) BaseAdapter {

@@ -24,8 +24,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
-	"dpm.iskff.fi/dpm/internal/search"
+	"dpm.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/search"
 )
 
 func main() {

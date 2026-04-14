@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 // cargoInstallTimeout caps how long a `cargo install` may run.

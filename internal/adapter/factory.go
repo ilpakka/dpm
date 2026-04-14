@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 func NewAdapter() (IAdapter, error) {

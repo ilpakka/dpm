@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 // buildTarGz creates a .tar.gz archive from the contents of srcDir.

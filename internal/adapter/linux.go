@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 var _ IAdapter = (*LinuxAdapter)(nil)

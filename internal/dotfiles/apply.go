@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/adapter"
 )
 
 // ApplyResult tracks what happened when installing a dotfile set.

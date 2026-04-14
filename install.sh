@@ -1,9 +1,9 @@
 #!/bin/sh
-# DPM installer — https://dpm.iskff.fi
-# Usage: curl -sL https://dpm.iskff.fi/install.sh | sh
+# DPM installer — https://dpm.fi
+# Usage: curl -sL https://dpm.fi/install.sh | sh
 set -e
 
-BASE_URL="https://dpm.iskff.fi/packages"
+BASE_URL="https://dpm.fi/packages"
 INSTALL_DIR="$HOME/.local/bin"
 
 # Detect platform

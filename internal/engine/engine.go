@@ -12,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/catalog"
-	"dpm.iskff.fi/dpm/internal/dotfiles"
-	"dpm.iskff.fi/dpm/internal/installer"
-	"dpm.iskff.fi/dpm/internal/metadata"
-	"dpm.iskff.fi/dpm/internal/profiles"
-	"dpm.iskff.fi/dpm/internal/settings"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/dotfiles"
+	"dpm.fi/dpm/internal/installer"
+	"dpm.fi/dpm/internal/metadata"
+	"dpm.fi/dpm/internal/profiles"
+	"dpm.fi/dpm/internal/settings"
 )
 
 var ErrAlreadyInstalled = errors.New("tool version already installed")

@@ -5,7 +5,7 @@ package adapter
 import (
 	"fmt"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 func newAdapter(platform catalog.Platform) (IAdapter, error) {

@@ -21,7 +21,7 @@ DPM reduces that friction by combining tool install, profile application, search
 Install on Linux or macOS:
 
 ```bash
-curl -sL https://dpm.iskff.fi/install.sh | sh
+curl -sL https://dpm.fi/install.sh | sh
 dpm version
 ```
 

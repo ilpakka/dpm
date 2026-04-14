@@ -3,7 +3,7 @@ package adapter
 import (
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 type MergeStrategy string

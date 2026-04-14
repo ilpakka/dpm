@@ -31,7 +31,7 @@ echo -e "━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo -e "${YELLOW}Welcome to dpm Preview Menu${RESET}"
 echo "This is a demo server. For full functionality, install the local TUI:"
-echo -e "${CYAN}curl -sL https://get.dpm.iskff.fi | sh${RESET}"
+echo -e "${CYAN}curl -sL https://run.dpm.fi | sh${RESET}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -68,10 +68,10 @@ function download_info() {
     echo -e "${BOLD}Download Offline Bundle:${RESET}"
     echo ""
     echo "To download a complete offline bundle, use:"
-    echo -e "${CYAN}curl -o dpm-offline.tar.gz https://get.dpm.iskff.fi/bundle/offline-latest.tar.gz${RESET}"
+    echo -e "${CYAN}curl -o dpm-offline.tar.gz https://run.dpm.fi/bundle/offline-latest.tar.gz${RESET}"
     echo ""
     echo "Or install the local TUI for full functionality:"
-    echo -e "${CYAN}curl -sL https://get.dpm.iskff.fi | sh${RESET}"
+    echo -e "${CYAN}curl -sL https://run.dpm.fi | sh${RESET}"
     echo ""
 }
 
@@ -102,7 +102,7 @@ function main_menu() {
             4)
                 echo ""
                 echo "Thanks for trying dpm!"
-                echo "Install the full client: curl -sL https://get.dpm.iskff.fi | sh"
+                echo "Install the full client: curl -sL https://run.dpm.fi | sh"
                 echo ""
                 exit 0
                 ;;
@@ -114,7 +114,7 @@ function main_menu() {
         
         read -p "Press Enter to continue..."
         clear
-        echo -e "${CYAN}dpm.iskff.fi - Preview Menu${RESET}"
+        echo -e "${CYAN}dpm.fi - Preview Menu${RESET}"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     done
 }

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/dotfiles"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/dotfiles"
 )
 
 // Doctor runs the same set of checks as the `dpm doctor` CLI command and

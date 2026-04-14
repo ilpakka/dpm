@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 var _ IAdapter = (*MacOSAdapter)(nil)

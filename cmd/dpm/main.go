@@ -16,12 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
-	"dpm.iskff.fi/dpm/internal/dotfiles"
-	"dpm.iskff.fi/dpm/internal/engine"
-	"dpm.iskff.fi/dpm/internal/profiles"
-	"dpm.iskff.fi/dpm/internal/search"
-	"dpm.iskff.fi/dpm/internal/serve"
+	"dpm.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/dotfiles"
+	"dpm.fi/dpm/internal/engine"
+	"dpm.fi/dpm/internal/profiles"
+	"dpm.fi/dpm/internal/search"
+	"dpm.fi/dpm/internal/serve"
 	"github.com/urfave/cli/v2"
 )
 

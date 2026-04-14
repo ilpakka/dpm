@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dumb Packet Manager (dpm) Installation Script
-# Usage: curl -sL https://get.dpm.iskff.fi | sh
+# Usage: curl -sL https://run.dpm.fi | sh
 
 set -e
 
@@ -122,4 +122,4 @@ echo ""
 echo "  4. Start the TUI:"
 echo -e "     ${CYAN}dpm${RESET}"
 echo ""
-echo -e "${GREEN}For more information, visit: https://dpm.iskff.fi/docs${RESET}"
+echo -e "${GREEN}For more information, visit: https://dpm.fi/docs${RESET}"

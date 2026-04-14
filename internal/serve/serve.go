@@ -23,12 +23,12 @@ import (
 	"os"
 	"sync"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
-	"dpm.iskff.fi/dpm/internal/dotfiles"
-	"dpm.iskff.fi/dpm/internal/engine"
-	"dpm.iskff.fi/dpm/internal/metadata"
-	"dpm.iskff.fi/dpm/internal/profiles"
-	"dpm.iskff.fi/dpm/internal/settings"
+	"dpm.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/dotfiles"
+	"dpm.fi/dpm/internal/engine"
+	"dpm.fi/dpm/internal/metadata"
+	"dpm.fi/dpm/internal/profiles"
+	"dpm.fi/dpm/internal/settings"
 )
 
 // Compile-time assertion: the real *engine.Engine must satisfy our interface.

@@ -8,10 +8,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
-	"dpm.iskff.fi/dpm/internal/dotfiles"
-	"dpm.iskff.fi/dpm/internal/profiles"
-	"dpm.iskff.fi/dpm/internal/util"
+	"dpm.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/dotfiles"
+	"dpm.fi/dpm/internal/profiles"
+	"dpm.fi/dpm/internal/util"
 )
 
 type SearchReadyMsg struct {

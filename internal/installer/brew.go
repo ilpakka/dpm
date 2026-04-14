@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/adapter"
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/adapter"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 // BrewBackend installs tools via Homebrew (macOS / Linux).

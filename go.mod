@@ -1,4 +1,4 @@
-module dpm.iskff.fi/dpm
+module dpm.fi/dpm
 
 go 1.25.0
 

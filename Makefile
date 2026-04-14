@@ -1,6 +1,6 @@
 .PHONY: all clean embed dpm dpm-linux dpm_check tui deploy
 
-DPM_HOST = dpm.iskff.fi
+DPM_HOST = dpm.fi
 DPM_USER = henry
 WEB_ROOT = /var/www/html
 
@@ -28,7 +28,7 @@ dpm_check:
 tui:
 	cd tui && cargo build --release
 
-# Deploy to production (dpm.iskff.fi)
+# Deploy to production (dpm.fi)
 # Cross-compiles dpm for all platforms and uploads binaries + install.sh
 deploy: embed
 	@echo "=== Building all platforms ==="

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"dpm.iskff.fi/dpm/internal/catalog"
+	"dpm.fi/dpm/internal/catalog"
 )
 
 const (
