@@ -1,0 +1,60 @@
+# Binaries (root level only, not cmd/dpm/)
+/dpm
+secuirrel
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build artifacts
+/bin/
+/dist/
+/release/
+
+# Go
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# dpm specific
+bundles/
+*.tar.gz
+*.sig
+*.sha256
+test.hash
+
+# Test files
+testfiles/
+
+# Local development
+.env
+.env.local
+*.pem
+*.key
+cosign.key
+cosign.pub
+
+# Not needed anymore 
+/archive/
+
+# User scratch folder
+dev_scratch/
+.aider*
+
+# Internal design docs
+docs/
+bubble_todo.md
+cmd/dpm/catalog/
+cmd/dpm/profiles/
