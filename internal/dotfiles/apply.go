@@ -2,6 +2,8 @@ package dotfiles
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/url"
@@ -10,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"dpm.fi/dpm/internal/adapter"
 )
 
@@ -17,6 +21,7 @@ import (
 type ApplyResult struct {
 	DotfileID string   `json:"dotfile_id"`
 	ClonedTo  string   `json:"cloned_to,omitempty"` // path where repo was cloned
+	Commit    string   `json:"commit,omitempty"`    // git commit used for immutable snapshots
 	Applied   []string `json:"applied,omitempty"`   // files that were applied
 	Err       error    `json:"error,omitempty"`
 }
@@ -33,19 +38,17 @@ type ApplyOptions struct {
 func Apply(df Dotfile, opts ApplyOptions) (*ApplyResult, error) {
 	result := &ApplyResult{DotfileID: df.ID}
 
-	// Determine where source files live.
-	sourceDir, cleanup, err := resolveSource(df, opts.DPMRoot)
+	plan, err := Plan(df, opts)
 	if err != nil {
-		return nil, fmt.Errorf("dotfiles: resolve source for %s: %w", df.ID, err)
+		return nil, err
 	}
-	if cleanup != nil {
-		// Don't clean up — we keep cloned repos in ~/.dpm/dotfiles/<id>/
-		_ = cleanup
+	result.ClonedTo = plan.SourceDir
+	result.Commit = plan.Commit
+	if plan.Blocked {
+		return nil, fmt.Errorf("dotfiles: plan for %s is blocked: %s", df.ID, blockedIssues(plan))
 	}
-	result.ClonedTo = sourceDir
 
-	// Build DotfileSpecs from mappings or legacy Files list.
-	specs := buildSpecs(df, sourceDir, opts.HomeDir)
+	specs := plan.Specs()
 	if len(specs) == 0 {
 		return result, nil
 	}
@@ -68,57 +71,163 @@ func Apply(df Dotfile, opts ApplyOptions) (*ApplyResult, error) {
 	return result, nil
 }
 
+func blockedIssues(plan *PlanResult) string {
+	var issues []string
+	for _, item := range plan.Items {
+		if item.Risk != RiskBlock {
+			continue
+		}
+		for _, issue := range item.Issues {
+			issues = append(issues, fmt.Sprintf("%s: %s", item.Target, issue))
+		}
+	}
+	if len(issues) == 0 {
+		return "blocked by dotfile safety policy"
+	}
+	return strings.Join(issues, "; ")
+}
+
 // resolveSource ensures dotfile source files are available locally.
-// For git repos, clones into ~/.dpm/dotfiles/<id>/. For local dirs, returns as-is.
-func resolveSource(df Dotfile, dpmRoot string) (string, func(), error) {
+// For git repos, clones into an immutable commit snapshot. For local dirs, returns as-is.
+func resolveSource(df Dotfile, dpmRoot string) (string, error) {
 	// Local source directory — use directly.
 	if df.SourceDir != "" {
 		if _, err := os.Stat(df.SourceDir); err != nil {
-			return "", nil, fmt.Errorf("source dir %s: %w", df.SourceDir, err)
+			return "", fmt.Errorf("source dir %s: %w", df.SourceDir, err)
 		}
-		return df.SourceDir, nil, nil
+		abs, err := filepath.Abs(df.SourceDir)
+		if err != nil {
+			return "", fmt.Errorf("source dir %s: abs: %w", df.SourceDir, err)
+		}
+		return abs, nil
 	}
 
-	// Git repo — clone or pull.
+	// Git repo — clone to staging, resolve commit, then promote to immutable snapshot.
 	if df.SourceRepo != "" {
-		destDir := filepath.Join(dpmRoot, "dotfiles", df.ID)
-
-		// If already cloned, do a pull.
-		if isGitRepo(destDir) {
-			cmd := exec.Command("git", "-C", destDir, "pull", "--ff-only")
-			var buf bytes.Buffer
-			cmd.Stdout = &buf
-			cmd.Stderr = &buf
-			if err := cmd.Run(); err != nil {
-				log.Printf("dotfiles: git pull %s: %v (%s)", destDir, err, buf.String())
-			}
-			return destDir, nil, nil
-		}
-
-		// Clone fresh.
-		repoURL, err := normalizeRepoURL(df.SourceRepo)
-		if err != nil {
-			return "", nil, fmt.Errorf("invalid dotfile repo URL: %w", err)
-		}
-		if err := os.MkdirAll(filepath.Dir(destDir), 0o755); err != nil {
-			return "", nil, fmt.Errorf("create dotfiles dir: %w", err)
-		}
-
-		cmd := exec.Command("git", "clone", "--depth", "1", repoURL, destDir)
-		var buf bytes.Buffer
-		cmd.Stdout = &buf
-		cmd.Stderr = &buf
-		if err := cmd.Run(); err != nil {
-			return "", nil, fmt.Errorf("git clone %s: %w (%s)", repoURL, err, buf.String())
-		}
-		log.Printf("dotfiles: cloned %s → %s", repoURL, destDir)
-
-		return destDir, nil, nil
+		return resolveGitSnapshot(df, dpmRoot)
 	}
 
 	// No source specified — curated dotfile without source.
 	// Return a non-existent path which will produce no specs.
-	return filepath.Join(dpmRoot, "dotfiles", df.ID), nil, nil
+	return filepath.Join(dpmRoot, "dotfiles", df.ID), nil
+}
+
+func resolveGitSnapshot(df Dotfile, dpmRoot string) (string, error) {
+	repoURL, err := normalizeRepoURL(df.SourceRepo)
+	if err != nil {
+		return "", fmt.Errorf("invalid dotfile repo URL: %w", err)
+	}
+
+	snapshotID := safeSnapshotID(df.ID, repoURL)
+	dotRoot := filepath.Join(dpmRoot, "dotfiles")
+	stagingRoot := filepath.Join(dotRoot, "staging")
+	snapshotRoot := filepath.Join(dotRoot, "snapshots", snapshotID)
+	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create dotfiles staging dir: %w", err)
+	}
+	if err := os.MkdirAll(snapshotRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create dotfiles snapshots dir: %w", err)
+	}
+
+	stagingDir, err := os.MkdirTemp(stagingRoot, snapshotID+"-")
+	if err != nil {
+		return "", fmt.Errorf("create dotfiles staging clone: %w", err)
+	}
+	cleanupStaging := true
+	defer func() {
+		if cleanupStaging {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
+
+	if _, err := runGit("", "clone", "--depth", "1", repoURL, stagingDir); err != nil {
+		return "", fmt.Errorf("git clone %s: %w", repoURL, err)
+	}
+	commit, err := gitCommit(stagingDir)
+	if err != nil {
+		return "", err
+	}
+	snapshotDir := filepath.Join(snapshotRoot, commit)
+
+	if snapshotOK(snapshotDir, commit) {
+		log.Printf("dotfiles: using cached snapshot %s", snapshotDir)
+		return snapshotDir, nil
+	}
+	if _, err := os.Stat(snapshotDir); err == nil {
+		return "", fmt.Errorf("dotfiles: snapshot %s exists but does not match commit %s", snapshotDir, commit)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("dotfiles: stat snapshot %s: %w", snapshotDir, err)
+	}
+
+	if err := os.Rename(stagingDir, snapshotDir); err != nil {
+		if snapshotOK(snapshotDir, commit) {
+			return snapshotDir, nil
+		}
+		return "", fmt.Errorf("dotfiles: promote snapshot %s: %w", snapshotDir, err)
+	}
+	cleanupStaging = false
+	log.Printf("dotfiles: promoted %s@%s → %s", repoURL, commit, snapshotDir)
+	return snapshotDir, nil
+}
+
+func runGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		return strings.TrimSpace(buf.String()), fmt.Errorf("%w (%s)", err, strings.TrimSpace(buf.String()))
+	}
+	return strings.TrimSpace(buf.String()), nil
+}
+
+func gitCommit(repoDir string) (string, error) {
+	commit, err := runGit(repoDir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("dotfiles: resolve git commit for %s: %w", repoDir, err)
+	}
+	if len(commit) != 40 {
+		return "", fmt.Errorf("dotfiles: git commit for %s is invalid: %q", repoDir, commit)
+	}
+	return commit, nil
+}
+
+func snapshotOK(snapshotDir, commit string) bool {
+	if _, err := os.Stat(snapshotDir); err != nil {
+		return false
+	}
+	existing, err := gitCommit(snapshotDir)
+	return err == nil && existing == commit
+}
+
+func safeSnapshotID(id, repoURL string) string {
+	id = strings.ToLower(strings.TrimSpace(id))
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	base := strings.Trim(b.String(), "-._")
+	if base == "" {
+		base = "dotfile"
+	}
+	return base + "-" + shortHash(repoURL)
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // buildSpecs converts a Dotfile's mappings into adapter.DotfileSpec entries.
@@ -221,12 +330,39 @@ func parseMergeStrategy(s string) adapter.MergeStrategy {
 }
 
 // normalizeRepoURL ensures a GitHub/GitLab shorthand becomes a full HTTPS URL.
-// SSH git@ URLs are passed through unchanged. All other inputs are parsed and
-// validated: credentials embedded in the URL are rejected, and the scheme must
-// be HTTPS.
+// SSH URLs (both ssh:// scheme and SCP-style [user@]host:path) are passed
+// through after lightweight validation; git handles auth via SSH keys.
+// HTTPS URLs are validated and credentials are rejected.
 func normalizeRepoURL(repo string) (string, error) {
-	// Pass SSH URLs through as-is — git handles auth via SSH keys.
-	if strings.HasPrefix(repo, "git@") {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "", fmt.Errorf("repository URL is empty")
+	}
+
+	// SCP-style SSH URL: [user@]host:path (e.g. git@github.com:user/repo or
+	// henry@polaris.koti:/storage/dotfiles.git). Detected by a colon that
+	// precedes any slash and no "://" anywhere in the string.
+	if isSSHScpStyle(repo) {
+		if err := validateSSHScpURL(repo); err != nil {
+			return "", err
+		}
+		return repo, nil
+	}
+
+	// ssh:// protocol URL.
+	if strings.HasPrefix(repo, "ssh://") {
+		parsed, err := url.Parse(repo)
+		if err != nil {
+			return "", fmt.Errorf("invalid ssh repository URL %q: %w", repo, err)
+		}
+		if parsed.Host == "" {
+			return "", fmt.Errorf("ssh repository URL has no host: %q", repo)
+		}
+		if parsed.User != nil {
+			if _, hasPassword := parsed.User.Password(); hasPassword {
+				return "", fmt.Errorf("ssh repository URL must not contain a password: %q", repo)
+			}
+		}
 		return repo, nil
 	}
 
@@ -259,8 +395,107 @@ func normalizeRepoURL(repo string) (string, error) {
 	return parsed.String(), nil
 }
 
+func isSSHScpStyle(repo string) bool {
+	if strings.Contains(repo, "://") {
+		return false
+	}
+	colon := strings.IndexByte(repo, ':')
+	if colon <= 0 {
+		return false
+	}
+	if slash := strings.IndexByte(repo, '/'); slash != -1 && slash < colon {
+		return false
+	}
+	return true
+}
+
+func validateSSHScpURL(repo string) error {
+	colon := strings.IndexByte(repo, ':')
+	hostPart := repo[:colon]
+
+	var user, host string
+	if at := strings.IndexByte(hostPart, '@'); at >= 0 {
+		user = hostPart[:at]
+		host = hostPart[at+1:]
+	} else {
+		host = hostPart
+	}
+
+	if host == "" {
+		return fmt.Errorf("repository URL has empty host: %q", repo)
+	}
+	if !validHostChars(user) {
+		return fmt.Errorf("repository URL has invalid user %q", user)
+	}
+	if !validHostChars(host) {
+		return fmt.Errorf("repository URL has invalid host %q", host)
+	}
+	return nil
+}
+
+func validHostChars(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-', r == '.', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // isGitRepo checks if dir contains a .git directory.
 func isGitRepo(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil
+}
+
+// manifestCandidates lists the file names a dotfiles repo can use to declare
+// its file mappings. The first match wins.
+var manifestCandidates = []string{"dpm.yaml", "dpm.yml", ".dpm.yaml", ".dpm.yml"}
+
+// mergeManifest looks for a DPM manifest at the repo root and fills in
+// df.Mappings / df.Files from it when the caller didn't supply any. CLI-provided
+// mappings always take precedence; the manifest only fills empty metadata fields.
+func mergeManifest(df *Dotfile, sourceDir string) error {
+	if len(df.Mappings) > 0 || len(df.Files) > 0 {
+		return nil
+	}
+	for _, name := range manifestCandidates {
+		path := filepath.Join(sourceDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read manifest %s: %w", name, err)
+		}
+		var manifest Dotfile
+		if err := yaml.Unmarshal(data, &manifest); err != nil {
+			return fmt.Errorf("parse manifest %s: %w", name, err)
+		}
+		if df.ID == "" {
+			df.ID = manifest.ID
+		}
+		if df.Name == "" {
+			df.Name = manifest.Name
+		}
+		if df.Description == "" {
+			df.Description = manifest.Description
+		}
+		if df.ToolID == "" {
+			df.ToolID = manifest.ToolID
+		}
+		if df.Version == "" {
+			df.Version = manifest.Version
+		}
+		df.Mappings = manifest.Mappings
+		df.Files = manifest.Files
+		log.Printf("dotfiles: loaded manifest %s with %d mappings", name, len(manifest.Mappings))
+		return nil
+	}
+	return nil
 }

@@ -75,7 +75,7 @@ DPM resolves install methods from catalog entries.
 | --- | --- | --- | --- |
 | -i, --install | -v, --verbose | Install a tool or matching course/profile target | dpm -i -v binwalk@2 |
 | -r, --remove | none | Remove an installed tool | dpm --remove binwalk |
-| -u, --update | none | Check or update installed tools to latest catalog version | dpm -u nmap |
+| -u, --update | -a, --all | Check or update installed tools to latest catalog version | dpm -u -a |
 | -l, --list | -a, --all and -c, --category | List installed tools or catalog tools | dpm --list -a |
 | -s, --search | -a, --all and -t, --tools and -p, --profiles and -c, --community | Search tools, profiles, and community index entries | dpm -s -t nmap |
 | -x, --inspect | none | Inspect a community profile before applying | dpm --inspect 4 |
@@ -83,11 +83,46 @@ DPM resolves install methods from catalog entries.
 | -v, --version | none | Print DPM version | dpm -v |
 | -a, --apply | none | Apply a local profile | dpm --apply ICI012AS3A |
 | -c, --config + -i, --install | -i, --id and -m, --map | Install and map dotfiles from repo or local path | dpm -c -i user/dotfiles |
+| -c, --config + --scan | --apply and --scripts | Scan a dotfiles repo and optionally apply detected configs | dpm -c --scan --apply user/dotfiles |
 | -c, --config + -x, --inspect | none | Inspect community profile and optional dotfile | dpm -c -x 4 .tmux.conf |
+| --settings | list, set, toggle, reset | View and edit persisted DPM settings | dpm --settings set offline-mode true |
 | -o, --restore | -y, --yes | Reset DPM-managed tools and state | dpm -o -y |
 | -b, --bubble | none | Start an ephemeral bubble session | dpm -b |
 | -d, --doctor | none | Run health and configuration checks | dpm --doctor |
 | -n, --serve | -s, --stdio | Start JSON-RPC backend for TUI integration | dpm -n -s |
+
+## Dotfiles
+
+`dpm config install <repo>` clones a dotfiles repo and applies file mappings.
+
+Supported repo URL forms:
+
+- GitHub shorthand: `user/repo`
+- HTTPS: `https://github.com/user/repo`
+- SSH protocol: `ssh://user@host/path/repo.git`
+- SCP-style SSH: `user@host:/path/repo.git`
+
+### Manifest
+
+A repo can declare its mappings in a top-level `dpm.yaml` so callers do not
+need `--map` flags. When the manifest is present, DPM reads it after cloning.
+
+```yaml
+id: my-dotfiles
+name: my-dotfiles
+description: Personal configs shared across machines
+mappings:
+  - source: ohmyposh/theme.toml
+    target: .config/ohmyposh/theme.toml
+    merge_strategy: backup
+  - source: tmux/tmux.conf
+    target: .tmux.conf
+    merge_strategy: backup
+```
+
+Targets are resolved relative to `$HOME`. Merge strategies are `backup` (default),
+`append`, `skip`, or `force`. CLI `--map` flags override the manifest when both
+are supplied.
 
 ## Who It Is For
 
@@ -107,7 +142,7 @@ DPM resolves install methods from catalog entries.
 ### Local Build Dependencies
 
 - For make dpm: Go 1.25+, make, and a Unix-like shell toolchain.
-- For make dpm_check: gcc (or compatible C compiler) and OpenSSL libcrypto headers/libs.
+- For make dpm_check: gcc or another C compiler.
 - For make tui: Rust and Cargo.
 
 If you only build the main CLI binary, Go and make are the key requirements.
