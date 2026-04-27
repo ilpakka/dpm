@@ -3,7 +3,7 @@
 # Usage: curl -sL https://dpm.fi/install.sh | sh
 set -e
 
-BASE_URL="${DPM_BASE_URL:-https://dpm.fi/packages}"
+BASE_URL="${DPM_BASE_URL:-https://github.com/ilpakka/dpm/releases/latest/download}"
 INSTALL_DIR="${DPM_INSTALL_DIR:-$HOME/.local/bin}"
 CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/dpm/bootstrap"
 RETRIES="${DPM_INSTALL_RETRIES:-6}"
@@ -171,7 +171,7 @@ verify_sha256() {
 fetch_expected_checksum() {
   bin=$1
   attempts=$2
-  checksum_url="${BASE_URL}/${PLATFORM}/${bin}.sha256"
+  checksum_url="${BASE_URL}/${bin}-${PLATFORM}.sha256"
   checksum_tmp="${CACHE_DIR}/.${bin}.sha256.$$"
 
   rm -f "$checksum_tmp"
@@ -199,7 +199,7 @@ ensure_cached_binary() {
   expected=$2
   cache_path="${CACHE_DIR}/${bin}"
   part_path="${CACHE_DIR}/${bin}.part"
-  bin_url="${BASE_URL}/${PLATFORM}/${bin}"
+  bin_url="${BASE_URL}/${bin}-${PLATFORM}"
 
   if [ -f "$cache_path" ]; then
     if verify_sha256 "$cache_path" "$expected"; then
@@ -287,7 +287,7 @@ require_tools
 
 log "dpm installer"
 log "Platform: ${PLATFORM}"
-log "Source: ${BASE_URL}/${PLATFORM}"
+log "Source: ${BASE_URL}"
 log "Install dir: ${INSTALL_DIR}"
 log "Cache dir: ${CACHE_DIR}"
 log ""
