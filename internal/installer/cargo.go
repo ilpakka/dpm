@@ -34,7 +34,7 @@ func (c *CargoBackend) PrepareBundle(tool catalog.Tool, version catalog.ToolVers
 
 	// cargo install --root puts the binary in <root>/bin/
 	installDir := filepath.Join(dpmRoot, "tools", tool.ID, version.Version)
-	if err := os.MkdirAll(installDir, 0o755); err != nil {
+	if err := os.MkdirAll(installDir, 0o700); err != nil {
 		return adapter.Bundle{}, nil, fmt.Errorf("cargo: create install dir: %w", err)
 	}
 

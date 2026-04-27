@@ -88,7 +88,7 @@ func plannedSpecs(df Dotfile, sourceDir, homeDir string) []adapter.DotfileSpec {
 	if len(df.Mappings) > 0 {
 		for _, m := range df.Mappings {
 			sourcePath := filepath.Join(sourceDir, m.Source)
-			targetPath, err := expandTarget(m.Target, homeDir)
+			targetPath, err := ExpandTarget(m.Target, homeDir)
 			if err != nil {
 				targetPath = m.Target
 			}
@@ -106,7 +106,7 @@ func plannedSpecs(df Dotfile, sourceDir, homeDir string) []adapter.DotfileSpec {
 		if sourcePath == "" {
 			sourcePath = filepath.Join(sourceDir, strings.TrimPrefix(file, string(os.PathSeparator)))
 		}
-		targetPath, err := expandTarget(file, homeDir)
+		targetPath, err := ExpandTarget(file, homeDir)
 		if err != nil {
 			targetPath = file
 		}

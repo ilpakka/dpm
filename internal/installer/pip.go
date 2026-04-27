@@ -42,10 +42,10 @@ func (p *PipBackend) PrepareBundle(tool catalog.Tool, version catalog.ToolVersio
 	installDir := filepath.Join(dpmRoot, "tools", tool.ID, version.Version)
 	siteDir := filepath.Join(installDir, "lib")
 	binDir := filepath.Join(installDir, "bin")
-	if err := os.MkdirAll(siteDir, 0o755); err != nil {
+	if err := os.MkdirAll(siteDir, 0o700); err != nil {
 		return adapter.Bundle{}, nil, fmt.Errorf("pip: create install dir: %w", err)
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return adapter.Bundle{}, nil, fmt.Errorf("pip: create bin dir: %w", err)
 	}
 

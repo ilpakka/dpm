@@ -89,6 +89,11 @@ type Config struct {
 	EmbeddedCatalog  fs.FS // optional: embedded catalog YAML files
 	EmbeddedProfiles fs.FS // optional: embedded profile YAML files
 	EmbeddedDotfiles fs.FS // optional: embedded dotfiles YAML files
+
+	// ConfirmFunc is called when user confirmation is required (e.g. install
+	// scripts). Defaults to stdinConfirm. The serve layer replaces this with a
+	// deny function so that RPC pipe stdin is never consumed as user input.
+	ConfirmFunc func(prompt string) bool
 }
 
 // Engine coordinates the main DPM subsystems.
@@ -101,11 +106,14 @@ type Engine struct {
 	metadata       *metadata.Store
 	settingsMgr    *settings.Manager
 	logger         Logger
+	confirmFunc    func(prompt string) bool
 
 	// catalog cache — loaded once and reused for the engine's lifetime.
-	mu          sync.Mutex
-	cachedTools []catalog.Tool
-	toolsLoaded bool
+	mu             sync.Mutex
+	cachedTools    []catalog.Tool
+	toolsLoaded    bool
+	cachedProfiles []profiles.Profile
+	profilesLoaded bool
 }
 
 // New creates an Engine with default dependencies.
@@ -215,6 +223,12 @@ func NewWithConfig(cfg Config) (*Engine, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = log.Default()
 	}
+	if cfg.Settings == nil {
+		cfg.Settings, _ = settings.NewManager(cfg.Adapter.GetDPMRoot())
+	}
+	if cfg.ConfirmFunc == nil {
+		cfg.ConfirmFunc = stdinConfirm
+	}
 
 	e := &Engine{
 		adapter:        cfg.Adapter,
@@ -225,6 +239,7 @@ func NewWithConfig(cfg Config) (*Engine, error) {
 		metadata:       cfg.Metadata,
 		settingsMgr:    cfg.Settings,
 		logger:         cfg.Logger,
+		confirmFunc:    cfg.ConfirmFunc,
 	}
 
 	if err := e.initialize(); err != nil {
@@ -266,6 +281,16 @@ func NewWithAdapter(a adapter.IAdapter) *Engine {
 
 func (e *Engine) SetLogger(l Logger) {
 	e.logger = l
+}
+
+// SetConfirmFunc replaces the function used to ask the user for confirmation
+// (e.g. before running an install script). The serve layer uses this to install
+// a deny-by-default function so that the JSON-RPC pipe is never consumed as
+// user input.
+func (e *Engine) SetConfirmFunc(f func(prompt string) bool) {
+	if f != nil {
+		e.confirmFunc = f
+	}
 }
 
 // Platform returns the current platform string.
@@ -353,8 +378,8 @@ type UpdateStatus struct {
 	ToolID         string `json:"tool_id"`
 	InstalledVer   string `json:"installed_ver"`
 	AvailableVer   string `json:"available_ver,omitempty"`
-	UpdateRequired bool   `json:"update_required"`        // true when catalog has a newer version
-	NotInCatalog   bool   `json:"not_in_catalog"`         // true when tool is installed but no longer in catalog
+	UpdateRequired bool   `json:"update_required"` // true when catalog has a newer version
+	NotInCatalog   bool   `json:"not_in_catalog"`  // true when tool is installed but no longer in catalog
 }
 
 // CheckUpdates compares every installed tool against the catalog and returns
@@ -491,7 +516,7 @@ func (e *Engine) InstallTool(tool catalog.Tool, version catalog.ToolVersion) (*I
 	}
 
 	result, err := e.adapter.InstallBundle(bundle, adapter.InstallOptions{
-		ConfirmFunc: stdinConfirm,
+		ConfirmFunc: e.confirmFunc,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: install %s@%s: %w", tool.ID, version.Version, err)
@@ -618,9 +643,16 @@ func (e *Engine) Restore() (*RestoreResult, error) {
 	}
 
 	// Re-create empty tools/ and bin/ so the engine can be used again immediately.
+	// Use the same permission as initialize() so strict-permissions is honoured.
+	dirPerm := os.FileMode(0o700)
+	if e.settingsMgr != nil {
+		if s := e.settingsMgr.Get("strict-permissions"); s != nil && s.Value == "false" {
+			dirPerm = 0o755
+		}
+	}
 	for _, sub := range []string{"tools", "bin"} {
 		dir := filepath.Join(dpmRoot, sub)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("recreate %s/: %w", sub, err))
 		}
 	}
@@ -637,6 +669,17 @@ func (e *Engine) initialize() error {
 		return fmt.Errorf("engine: initialize: adapter returned empty DPM root")
 	}
 
+	// Honour the strict-permissions setting (default: true).
+	// When enabled all DPM-owned directories are created 0700 so other local
+	// users on shared machines cannot read installed-tool metadata or cached
+	// archives.
+	dirPerm := os.FileMode(0o700)
+	if e.settingsMgr != nil {
+		if s := e.settingsMgr.Get("strict-permissions"); s != nil && s.Value == "false" {
+			dirPerm = 0o755
+		}
+	}
+
 	dirs := []string{
 		root,
 		filepath.Join(root, "cache"),
@@ -646,7 +689,7 @@ func (e *Engine) initialize() error {
 	}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
 			return fmt.Errorf("engine: initialize: create %s: %w", dir, err)
 		}
 	}
@@ -816,7 +859,7 @@ type ProfileResult struct {
 // FindProfileByCourseCode looks up a profile by its CourseCode or ID field.
 // Returns nil if no match is found.
 func (e *Engine) FindProfileByCourseCode(code string) (*profiles.Profile, error) {
-	profs, err := e.profiles.LoadProfiles()
+	profs, err := e.loadProfiles()
 	if err != nil {
 		return nil, fmt.Errorf("engine: find profile %q: %w", code, err)
 	}
@@ -825,7 +868,7 @@ func (e *Engine) FindProfileByCourseCode(code string) (*profiles.Profile, error)
 
 // Profiles loads profiles through the configured profile provider.
 func (e *Engine) Profiles() ([]profiles.Profile, error) {
-	profs, err := e.profiles.LoadProfiles()
+	profs, err := e.loadProfiles()
 	if err != nil {
 		return nil, fmt.Errorf("engine: load profiles: %w", err)
 	}
@@ -996,6 +1039,22 @@ func (e *Engine) loadCatalog() ([]catalog.Tool, error) {
 	return out, nil
 }
 
+func (e *Engine) loadProfiles() ([]profiles.Profile, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.profilesLoaded {
+		profs, err := e.profiles.LoadProfiles()
+		if err != nil {
+			return nil, err
+		}
+		e.cachedProfiles = profs
+		e.profilesLoaded = true
+	}
+	out := make([]profiles.Profile, len(e.cachedProfiles))
+	copy(out, e.cachedProfiles)
+	return out, nil
+}
+
 // compareSemver compares two "MAJOR.MINOR.PATCH" version strings.
 // Returns 1 if a > b, -1 if a < b, 0 if equal.
 // Falls back to lexicographic comparison if either string is not valid semver.
@@ -1055,4 +1114,3 @@ func pathWithin(path, parent string) bool {
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
-

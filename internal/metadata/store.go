@@ -52,7 +52,7 @@ func (s *Store) Ensure() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("metadata: ensure directory: %w", err)
 	}
 
@@ -168,7 +168,7 @@ func (s *Store) Remove(toolID, version string) error {
 }
 
 func (s *Store) loadLocked() (State, error) {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return State{}, fmt.Errorf("metadata: ensure directory: %w", err)
 	}
 
@@ -210,7 +210,7 @@ func (s *Store) writeLocked(state State) error {
 	data = append(data, '\n')
 
 	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("metadata: write temp %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, s.path); err != nil {

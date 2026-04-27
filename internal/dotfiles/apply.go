@@ -2,6 +2,7 @@ package dotfiles
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -122,10 +124,10 @@ func resolveGitSnapshot(df Dotfile, dpmRoot string) (string, error) {
 	dotRoot := filepath.Join(dpmRoot, "dotfiles")
 	stagingRoot := filepath.Join(dotRoot, "staging")
 	snapshotRoot := filepath.Join(dotRoot, "snapshots", snapshotID)
-	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
+	if err := os.MkdirAll(stagingRoot, 0o700); err != nil {
 		return "", fmt.Errorf("create dotfiles staging dir: %w", err)
 	}
-	if err := os.MkdirAll(snapshotRoot, 0o755); err != nil {
+	if err := os.MkdirAll(snapshotRoot, 0o700); err != nil {
 		return "", fmt.Errorf("create dotfiles snapshots dir: %w", err)
 	}
 
@@ -140,7 +142,9 @@ func resolveGitSnapshot(df Dotfile, dpmRoot string) (string, error) {
 		}
 	}()
 
-	if _, err := runGit("", "clone", "--depth", "1", repoURL, stagingDir); err != nil {
+	cloneCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if _, err := runGit(cloneCtx, "", "clone", "--depth", "1", repoURL, stagingDir); err != nil {
 		return "", fmt.Errorf("git clone %s: %w", repoURL, err)
 	}
 	commit, err := gitCommit(stagingDir)
@@ -170,8 +174,11 @@ func resolveGitSnapshot(df Dotfile, dpmRoot string) (string, error) {
 	return snapshotDir, nil
 }
 
-func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -185,7 +192,9 @@ func runGit(dir string, args ...string) (string, error) {
 }
 
 func gitCommit(repoDir string) (string, error) {
-	commit, err := runGit(repoDir, "rev-parse", "HEAD")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	commit, err := runGit(ctx, repoDir, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("dotfiles: resolve git commit for %s: %w", repoDir, err)
 	}
@@ -241,7 +250,7 @@ func buildSpecs(df Dotfile, sourceDir, homeDir string) []adapter.DotfileSpec {
 			if _, err := os.Stat(sourcePath); err != nil {
 				continue // Skip missing source files.
 			}
-			targetPath, err := expandTarget(m.Target, homeDir)
+			targetPath, err := ExpandTarget(m.Target, homeDir)
 			if err != nil {
 				log.Printf("dotfiles: skipping mapping with invalid target %q: %v", m.Target, err)
 				continue
@@ -263,7 +272,7 @@ func buildSpecs(df Dotfile, sourceDir, homeDir string) []adapter.DotfileSpec {
 		if sourcePath == "" {
 			continue
 		}
-		targetPath, err := expandTarget(file, homeDir)
+		targetPath, err := ExpandTarget(file, homeDir)
 		if err != nil {
 			log.Printf("dotfiles: skipping file with invalid target %q: %v", file, err)
 			continue
@@ -298,10 +307,10 @@ func findSourceFile(repoDir, targetName string) string {
 	return ""
 }
 
-// expandTarget turns a relative target path (e.g., ".tmux.conf") into an absolute
+// ExpandTarget turns a relative target path (e.g., ".tmux.conf") into an absolute
 // path under the user's home directory. Relative paths that would escape the home
 // directory (e.g. "../../etc/sudoers") are rejected with an error.
-func expandTarget(target, homeDir string) (string, error) {
+func ExpandTarget(target, homeDir string) (string, error) {
 	var expanded string
 	if filepath.IsAbs(target) {
 		expanded = filepath.Clean(target)

@@ -87,10 +87,12 @@ func (b *BaseAdapter) IsInPATH(dir string) bool {
 	}
 	// Also check if we already wrote the PATH block to the shell rc file,
 	// since the current process won't see it until the shell is restarted.
+	// Use dpmBlockMarker (the full header line) rather than dpmBlockStart so
+	// that a user comment containing "# ===== DPM" doesn't produce a false positive.
 	rcFile := b.shellRCFile()
 	if rcFile != "" {
 		if existing, err := os.ReadFile(rcFile); err == nil {
-			if strings.Contains(string(existing), dpmBlockStart) {
+			if strings.Contains(string(existing), dpmBlockMarker) {
 				return true
 			}
 		}
@@ -210,7 +212,10 @@ func (b *BaseAdapter) AddToPATH(dir string) error {
 	rcFile := b.shellRCFile()
 
 	if existing, err := os.ReadFile(rcFile); err == nil {
-		if strings.Contains(string(existing), dpmBlockStart) {
+		// Use dpmBlockMarker (the full header line) rather than the broad
+		// dpmBlockStart so that a user comment containing "# ===== DPM" does
+		// not falsely suppress writing the real PATH export block.
+		if strings.Contains(string(existing), dpmBlockMarker) {
 			return nil
 		}
 	}
@@ -400,6 +405,12 @@ func (b *BaseAdapter) installBundle(bundle Bundle, opts InstallOptions, extractF
 	}
 
 	if err := b.maybeRunInstallScript(bundle, finalDir, opts); err != nil {
+		// Rollback: remove symlinks and the promoted install directory so DPM
+		// does not leave untracked executables behind on a failed install.
+		for _, link := range symlinks {
+			_ = os.Remove(link)
+		}
+		_ = os.RemoveAll(finalDir)
 		return nil, err
 	}
 
@@ -452,7 +463,10 @@ func (b *BaseAdapter) applyAppend(spec DotfileSpec) (ApplyResult, error) {
 	}
 
 	if existing, err := os.ReadFile(spec.TargetPath); err == nil {
-		if strings.Contains(string(existing), dpmBlockStart) {
+		// Use dpmBlockMarker (the full header line) rather than the broad
+		// dpmBlockStart so that a user comment containing "# ===== DPM" does
+		// not falsely suppress a legitimate append.
+		if strings.Contains(string(existing), dpmBlockMarker) {
 			r.Skipped = true
 			return r, nil
 		}

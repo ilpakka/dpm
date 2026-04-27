@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
@@ -140,10 +142,10 @@ func (e *Engine) BubbleStart() (*BubbleSession, error) {
 	}
 
 	env := map[string]string{
-		"DPM_HOME":  bubbleRoot,
-		"HOME":      bubbleRoot,
-		"PATH":      filepath.Join(bubbleRoot, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"PS1":       "(dpm-bubble) $ ",
+		"DPM_HOME":   bubbleRoot,
+		"HOME":       bubbleRoot,
+		"PATH":       filepath.Join(bubbleRoot, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PS1":        "(dpm-bubble) $ ",
 		"DPM_BUBBLE": "1",
 	}
 
@@ -173,24 +175,43 @@ func (e *Engine) BubbleStop(rootPath string) error {
 // ScanGitDotfiles clones the given repo URL via the existing dotfile pipeline
 // (using a synthetic Dotfile entry) and runs DetectConfigs on the result.
 func (e *Engine) ScanGitDotfiles(repoURL string) (*DotfileScanResult, error) {
-	if strings.TrimSpace(repoURL) == "" {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
 		return nil, fmt.Errorf("engine: scan git dotfiles: repo URL is required")
 	}
+	if info, err := os.Stat(repoURL); err == nil && info.IsDir() {
+		repoDir, absErr := filepath.Abs(repoURL)
+		if absErr != nil {
+			return nil, fmt.Errorf("engine: scan git dotfiles: local path %s: %w", repoURL, absErr)
+		}
+		return scanDotfileDir(repoDir, ""), nil
+	}
 
-	// Use a unique synthetic ID so concurrent scans don't collide.
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("engine: scan git dotfiles: get home dir: %w", err)
+	}
 	df := dotfiles.Dotfile{
-		ID:         fmt.Sprintf("import-scan-%d", os.Getpid()),
+		ID:         "import-scan-" + shortHash(repoURL),
 		SourceRepo: repoURL,
 	}
-	result, err := e.InstallDotfile(df)
+	plan, err := dotfiles.Plan(df, dotfiles.ApplyOptions{
+		DPMRoot: e.adapter.GetDPMRoot(),
+		HomeDir: homeDir,
+		Adapter: e.adapter,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("engine: scan git dotfiles: clone: %w", err)
+		return nil, fmt.Errorf("engine: scan git dotfiles: prepare snapshot: %w", err)
 	}
-	if result.ClonedTo == "" {
-		return nil, fmt.Errorf("engine: scan git dotfiles: clone returned no path")
+	if plan.SourceDir == "" {
+		return nil, fmt.Errorf("engine: scan git dotfiles: snapshot returned no path")
 	}
 
-	detected := dotfiles.DetectConfigs(result.ClonedTo)
+	return scanDotfileDir(plan.SourceDir, plan.Commit), nil
+}
+
+func scanDotfileDir(repoDir, commit string) *DotfileScanResult {
+	detected := dotfiles.DetectConfigs(repoDir)
 	scanned := make([]ScannedDotfileConfig, 0, len(detected))
 	for _, d := range detected {
 		scanned = append(scanned, ScannedDotfileConfig{
@@ -203,14 +224,34 @@ func (e *Engine) ScanGitDotfiles(repoURL string) (*DotfileScanResult, error) {
 	}
 
 	return &DotfileScanResult{
-		RepoDir: result.ClonedTo,
+		RepoDir: repoDir,
+		Commit:  commit,
 		Configs: scanned,
-	}, nil
+	}
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // ApplyImportedDotfiles applies a previously scanned dotfile selection.
 // `repoDir` must be a directory previously returned by ScanGitDotfiles.
 // Each config is either copied to its target path or executed as a script.
+func (e *Engine) PlanImportedDotfiles(repoDir string, configs []ScannedDotfileConfig) (*dotfiles.PlanResult, error) {
+	if strings.TrimSpace(repoDir) == "" {
+		return nil, fmt.Errorf("engine: plan imported dotfiles: repo dir is required")
+	}
+	if _, err := os.Stat(repoDir); err != nil {
+		return nil, fmt.Errorf("engine: plan imported dotfiles: repo dir %s: %w", repoDir, err)
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("engine: plan imported dotfiles: get home dir: %w", err)
+	}
+	return dotfiles.PlanSpecs("imported", repoDir, homeDir, importedFileSpecs(repoDir, homeDir, configs)), nil
+}
+
 func (e *Engine) ApplyImportedDotfiles(repoDir string, configs []ScannedDotfileConfig) (*dotfiles.ApplyResult, error) {
 	if strings.TrimSpace(repoDir) == "" {
 		return nil, fmt.Errorf("engine: apply imported dotfiles: repo dir is required")
@@ -231,7 +272,18 @@ func (e *Engine) ApplyImportedDotfiles(repoDir string, configs []ScannedDotfileC
 
 	for _, cfg := range configs {
 		if cfg.IsScript {
+			if !cfg.AllowScript {
+				return nil, fmt.Errorf("engine: apply imported dotfiles: script %s was not explicitly allowed", cfg.Source)
+			}
 			scriptPath := filepath.Join(repoDir, cfg.Source)
+			if !pathWithin(scriptPath, repoDir) {
+				return nil, fmt.Errorf("engine: apply imported dotfiles: script %s escapes repo dir", cfg.Source)
+			}
+			if info, err := os.Stat(scriptPath); err != nil {
+				return nil, fmt.Errorf("engine: apply imported dotfiles: script %s: %w", cfg.Source, err)
+			} else if info.IsDir() {
+				return nil, fmt.Errorf("engine: apply imported dotfiles: script %s is a directory", cfg.Source)
+			}
 			cmd := exec.Command("sh", scriptPath)
 			cmd.Dir = repoDir
 			var scriptOut strings.Builder
@@ -247,32 +299,62 @@ func (e *Engine) ApplyImportedDotfiles(repoDir string, configs []ScannedDotfileC
 			result.Applied = append(result.Applied, cfg.Source)
 			continue
 		}
-		sourcePath := filepath.Join(repoDir, cfg.Source)
-		targetPath := cfg.Target
-		if !filepath.IsAbs(targetPath) {
-			targetPath = filepath.Join(homeDir, targetPath)
-		}
+	}
 
-		// Use the adapter's dotfile pipeline so backups + merges follow the
-		// same rules as native dotfile installs.
-		spec := adapter.DotfileSpec{
-			SourcePath:    sourcePath,
-			TargetPath:    targetPath,
-			MergeStrategy: parseMergeStrategy(cfg.MergeStrategy),
-		}
-		applyResults, applyErr := e.adapter.ApplyDotfiles([]adapter.DotfileSpec{spec}, adapter.InstallOptions{})
-		if applyErr != nil {
-			return nil, fmt.Errorf("engine: apply imported dotfiles: %s: %w", cfg.Source, applyErr)
-		}
-		for _, r := range applyResults {
-			if r.Applied {
-				result.Applied = append(result.Applied, r.Spec.TargetPath)
-			}
+	specs := importedFileSpecs(repoDir, homeDir, configs)
+	plan := dotfiles.PlanSpecs("imported", repoDir, homeDir, specs)
+	result.Commit = plan.Commit
+	if plan.Blocked {
+		return nil, fmt.Errorf("engine: apply imported dotfiles: plan blocked: %s", dotfilePlanIssues(plan))
+	}
+	applyResults, applyErr := e.adapter.ApplyDotfiles(plan.Specs(), adapter.InstallOptions{})
+	if applyErr != nil {
+		return nil, fmt.Errorf("engine: apply imported dotfiles: %w", applyErr)
+	}
+	for _, r := range applyResults {
+		if r.Applied {
+			result.Applied = append(result.Applied, r.Spec.TargetPath)
 		}
 	}
 
 	e.logger.Printf("imported dotfiles: %d files applied from %s", len(result.Applied), repoDir)
 	return result, nil
+}
+
+func importedFileSpecs(repoDir, homeDir string, configs []ScannedDotfileConfig) []adapter.DotfileSpec {
+	specs := make([]adapter.DotfileSpec, 0, len(configs))
+	for _, cfg := range configs {
+		if cfg.IsScript {
+			continue
+		}
+		sourcePath := filepath.Join(repoDir, cfg.Source)
+		targetPath := cfg.Target
+		if !filepath.IsAbs(targetPath) {
+			targetPath = filepath.Join(homeDir, targetPath)
+		}
+		specs = append(specs, adapter.DotfileSpec{
+			SourcePath:    sourcePath,
+			TargetPath:    targetPath,
+			MergeStrategy: parseMergeStrategy(cfg.MergeStrategy),
+		})
+	}
+	return specs
+}
+
+func dotfilePlanIssues(plan *dotfiles.PlanResult) string {
+	var issues []string
+	for _, item := range plan.Items {
+		if item.Risk != dotfiles.RiskBlock {
+			continue
+		}
+		for _, issue := range item.Issues {
+			issues = append(issues, fmt.Sprintf("%s: %s", item.Target, issue))
+		}
+	}
+	if len(issues) == 0 {
+		return "blocked by dotfile safety policy"
+	}
+	return strings.Join(issues, "; ")
 }
 
 // parseMergeStrategy mirrors the helper in package dotfiles. We re-implement

@@ -43,25 +43,11 @@ func (h *HTTPBackend) PrepareBundle(tool catalog.Tool, version catalog.ToolVersi
 
 	filename := filepath.Base(method.URL)
 	archivePath := filepath.Join(cacheDir, filename)
-
-	// Check if already cached and hash matches.
-	if h.cacheValid(archivePath, method.SHA256) {
-		h.logger.Printf("http: using cached %s", archivePath)
-	} else {
-		h.logger.Printf("http: downloading %s", method.URL)
-		if err := withRetry(4, h.logger, func() error {
-			return h.download(method.URL, archivePath)
-		}); err != nil {
-			return adapter.Bundle{}, nil, err
-		}
-	}
-
-	// Integrity check — require at least SHA-256 or PGP; refuse installation otherwise.
 	hasPGP := method.PGPKeyURL != "" && method.PGPSigURL != ""
 	hasHash := method.SHA256 != "" && !isPlaceholderHash(method.SHA256)
 
+	// Integrity check — require at least SHA-256 or PGP; refuse installation otherwise.
 	if !hasHash && !hasPGP {
-		_ = os.Remove(archivePath)
 		return adapter.Bundle{}, nil, fmt.Errorf(
 			"http: refusing to install %s: no SHA-256 hash or PGP signature configured — add a sha256: field to the catalog entry",
 			filename,
@@ -69,24 +55,41 @@ func (h *HTTPBackend) PrepareBundle(tool catalog.Tool, version catalog.ToolVersi
 	}
 
 	verified := false
-	if hasHash {
-		if err := h.verifySHA256(archivePath, method.SHA256); err != nil {
-			_ = os.Remove(archivePath)
-			return adapter.Bundle{}, nil, err
-		}
-		h.logger.Printf("http: SHA-256 verified for %s", filename)
+	if ok, err := h.cacheValid(archivePath, method, cacheDir); ok {
+		h.logger.Printf("http: using cached %s", archivePath)
 		verified = true
-	}
+	} else {
+		if err != nil {
+			h.logger.Printf("http: cached %s failed verification: %v", archivePath, err)
+			_ = os.Remove(archivePath)
+		}
+		stageFile, err := os.CreateTemp(cacheDir, "."+filename+".*.verified")
+		if err != nil {
+			return adapter.Bundle{}, nil, fmt.Errorf("http: create verified cache staging file: %w", err)
+		}
+		stagePath := stageFile.Name()
+		_ = stageFile.Close()
+		_ = os.Remove(stagePath)
+		defer os.Remove(stagePath)
 
-	// PGP verification using the publisher's own public key (optional).
-	// Runs after SHA256 so a corrupt download is rejected before PGP is attempted.
-	if method.PGPKeyURL != "" && method.PGPSigURL != "" {
-		if err := h.verifyPGP(archivePath, method.PGPKeyURL, method.PGPSigURL, cacheDir); err != nil {
-			_ = os.Remove(archivePath)
+		h.logger.Printf("http: downloading %s", method.URL)
+		if err := withRetry(4, h.logger, func() error {
+			_ = os.Remove(stagePath)
+			return h.download(method.URL, stagePath)
+		}); err != nil {
 			return adapter.Bundle{}, nil, err
 		}
-		h.logger.Printf("http: PGP signature verified for %s", filename)
+
+		if err := h.verifyArchive(stagePath, method, cacheDir); err != nil {
+			_ = os.Remove(stagePath)
+			return adapter.Bundle{}, nil, err
+		}
+		if err := os.Rename(stagePath, archivePath); err != nil {
+			_ = os.Remove(stagePath)
+			return adapter.Bundle{}, nil, fmt.Errorf("http: promote verified cache %s: %w", archivePath, err)
+		}
 		verified = true
+		h.logger.Printf("http: promoted verified cache %s", archivePath)
 	}
 
 	bundle := adapter.Bundle{
@@ -103,6 +106,49 @@ func (h *HTTPBackend) PrepareBundle(tool catalog.Tool, version catalog.ToolVersi
 
 	// No cleanup needed — the file stays in cache for future use.
 	return bundle, nil, nil
+}
+
+func (h *HTTPBackend) cacheValid(path string, method catalog.InstallMethod, cacheDir string) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		return false, nil
+	}
+	if err := h.verifyArchive(path, method, cacheDir); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (h *HTTPBackend) verifyArchive(path string, method catalog.InstallMethod, cacheDir string) error {
+	filename := filepath.Base(path)
+	if method.Size > 0 {
+		if err := h.verifySize(path, method.Size); err != nil {
+			return err
+		}
+	}
+	if method.SHA256 != "" && !isPlaceholderHash(method.SHA256) {
+		if err := h.verifySHA256(path, method.SHA256); err != nil {
+			return err
+		}
+		h.logger.Printf("http: SHA-256 verified for %s", filename)
+	}
+	if method.PGPKeyURL != "" && method.PGPSigURL != "" {
+		if err := h.verifyPGP(path, method.PGPKeyURL, method.PGPSigURL, cacheDir); err != nil {
+			return err
+		}
+		h.logger.Printf("http: PGP signature verified for %s", filename)
+	}
+	return nil
+}
+
+func (h *HTTPBackend) verifySize(path string, expected int64) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("http: stat %s for size: %w", path, err)
+	}
+	if info.Size() != expected {
+		return fmt.Errorf("http: size mismatch for %s: expected %d bytes, got %d", filepath.Base(path), expected, info.Size())
+	}
+	return nil
 }
 
 func (h *HTTPBackend) download(url, destPath string) error {
@@ -165,16 +211,6 @@ func (h *HTTPBackend) verifySHA256(path, expected string) error {
 		return fmt.Errorf("http: SHA-256 mismatch for %s: expected %s, got %s", filepath.Base(path), expected, actual)
 	}
 	return nil
-}
-
-func (h *HTTPBackend) cacheValid(path, expectedSHA256 string) bool {
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	if expectedSHA256 == "" || isPlaceholderHash(expectedSHA256) {
-		return false // Can't verify — re-download.
-	}
-	return h.verifySHA256(path, expectedSHA256) == nil
 }
 
 // zeroHash is the all-zeros SHA-256 placeholder used in development catalog entries.

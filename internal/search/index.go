@@ -62,14 +62,13 @@ func LoadIndex(dpmDir string) (*Index, error) {
 	}
 
 	dir := idx.indexDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create index dir: %w", err)
 	}
 
 	snapPath := filepath.Join(dir, snapshotFile)
 	if _, err := os.Stat(snapPath); os.IsNotExist(err) {
-
-		if err := os.WriteFile(snapPath, bundledSnapshot, 0o644); err != nil {
+		if err := os.WriteFile(snapPath, bundledSnapshot, 0o600); err != nil {
 			log.Printf("search: failed to seed snapshot: %v", err)
 		}
 	}
@@ -198,7 +197,7 @@ func (idx *Index) save() error {
 		_ = tmpFile.Close()
 		return fmt.Errorf("write snapshot temp file: %w", err)
 	}
-	if err := tmpFile.Chmod(0o644); err != nil {
+	if err := tmpFile.Chmod(0o600); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("chmod snapshot temp file: %w", err)
 	}

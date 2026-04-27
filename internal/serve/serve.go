@@ -74,6 +74,7 @@ type Engine interface {
 	BubbleStart() (*engine.BubbleSession, error)
 	BubbleStop(rootPath string) error
 	ScanGitDotfiles(repoURL string) (*engine.DotfileScanResult, error)
+	PlanImportedDotfiles(repoDir string, configs []engine.ScannedDotfileConfig) (*dotfiles.PlanResult, error)
 	ApplyImportedDotfiles(repoDir string, configs []engine.ScannedDotfileConfig) (*dotfiles.ApplyResult, error)
 }
 
@@ -579,10 +580,27 @@ func (s *server) dispatch(method string, params json.RawMessage) (any, *rpcError
 		}
 		return result, nil
 
+	case "engine.dotfiles.planImported":
+		var p struct {
+			RepoDir string                        `json:"repo_dir"`
+			Configs []engine.ScannedDotfileConfig `json:"configs"`
+		}
+		if err := decodeParams(params, &p); err != nil {
+			return nil, &rpcError{Code: errInvalidParams, Message: err.Error()}
+		}
+		if p.RepoDir == "" {
+			return nil, &rpcError{Code: errInvalidParams, Message: "repo_dir is required"}
+		}
+		result, err := s.eng.PlanImportedDotfiles(p.RepoDir, p.Configs)
+		if err != nil {
+			return nil, &rpcError{Code: errInternal, Message: err.Error()}
+		}
+		return result, nil
+
 	case "engine.dotfiles.applyImported":
 		var p struct {
-			RepoDir string                         `json:"repo_dir"`
-			Configs []engine.ScannedDotfileConfig  `json:"configs"`
+			RepoDir string                        `json:"repo_dir"`
+			Configs []engine.ScannedDotfileConfig `json:"configs"`
 		}
 		if err := decodeParams(params, &p); err != nil {
 			return nil, &rpcError{Code: errInvalidParams, Message: err.Error()}

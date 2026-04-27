@@ -27,8 +27,9 @@ type BubbleSession struct {
 // DotfileScanResult is what ScanGitDotfiles returns: the cloned repo dir
 // plus every config file we recognised inside it.
 type DotfileScanResult struct {
-	RepoDir string                  `json:"repo_dir"`
-	Configs []ScannedDotfileConfig  `json:"configs"`
+	RepoDir string                 `json:"repo_dir"`
+	Commit  string                 `json:"commit,omitempty"`
+	Configs []ScannedDotfileConfig `json:"configs"`
 }
 
 // ScannedDotfileConfig is the JSON-friendly version of dotfiles.DetectedConfig.
@@ -40,4 +41,5 @@ type ScannedDotfileConfig struct {
 	Target        string `json:"target"`
 	MergeStrategy string `json:"merge_strategy"`
 	IsScript      bool   `json:"is_script"`
+	AllowScript   bool   `json:"allow_script,omitempty"`
 }

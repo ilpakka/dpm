@@ -142,10 +142,14 @@ func stageWrapperBundle(
 	binName := binaryName(tool, method)
 	stageDir := filepath.Join(dpmRoot, "tools", tool.ID, version.Version)
 	stageBin := filepath.Join(stageDir, "bin")
-	if err := os.MkdirAll(stageBin, 0o755); err != nil {
+	if err := os.MkdirAll(stageBin, 0o700); err != nil {
 		return adapter.Bundle{}, nil, fmt.Errorf("%s: create stage dir: %w", methodType, err)
 	}
-	wrapperContent := fmt.Sprintf("#!/bin/sh\nexec %s \"$@\"\n", binPath)
+	// Single-quote the binary path so spaces and most special characters in
+	// the path do not cause word-splitting or unexpected shell expansion.
+	// Literal single quotes inside the path are escaped with '\''.
+	safePath := strings.ReplaceAll(binPath, "'", "'\\''")
+	wrapperContent := fmt.Sprintf("#!/bin/sh\nexec '%s' \"$@\"\n", safePath)
 	if err := os.WriteFile(filepath.Join(stageBin, binName), []byte(wrapperContent), 0o755); err != nil {
 		_ = os.RemoveAll(stageDir)
 		return adapter.Bundle{}, nil, fmt.Errorf("%s: write wrapper: %w", methodType, err)
