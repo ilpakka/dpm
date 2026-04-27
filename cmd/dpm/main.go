@@ -22,10 +22,11 @@ import (
 	"dpm.fi/dpm/internal/profiles"
 	"dpm.fi/dpm/internal/search"
 	"dpm.fi/dpm/internal/serve"
+	"dpm.fi/dpm/internal/settings"
 	"github.com/urfave/cli/v2"
 )
 
-var version = "v0.51"
+var version = "v0.5.2"
 
 const (
 	commandSummaryFormat = "   %-18s %s\n"
@@ -62,20 +63,21 @@ type optionSpec struct {
 }
 
 var topCommandAliases = map[string]commandAlias{
-	"install": {Short: "i", Long: "install"},
-	"remove":  {Short: "r", Long: "remove"},
-	"update":  {Short: "u", Long: "update"},
-	"list":    {Short: "l", Long: "list"},
-	"search":  {Short: "s", Long: "search"},
-	"inspect": {Short: "x", Long: "inspect"},
-	"verify":  {Short: "k", Long: "verify"},
-	"version": {Short: "v", Long: "version"},
-	"apply":   {Short: "a", Long: "apply"},
-	"config":  {Short: "c", Long: "config"},
-	"restore": {Short: "o", Long: "restore"},
-	"serve":   {Short: "n", Long: "serve"},
-	"bubble":  {Short: "b", Long: "bubble"},
-	"doctor":  {Short: "d", Long: "doctor"},
+	"install":  {Short: "i", Long: "install"},
+	"remove":   {Short: "r", Long: "remove"},
+	"update":   {Short: "u", Long: "update"},
+	"list":     {Short: "l", Long: "list"},
+	"search":   {Short: "s", Long: "search"},
+	"inspect":  {Short: "x", Long: "inspect"},
+	"verify":   {Short: "k", Long: "verify"},
+	"version":  {Short: "v", Long: "version"},
+	"apply":    {Short: "a", Long: "apply"},
+	"config":   {Short: "c", Long: "config"},
+	"settings": {Long: "settings"},
+	"restore":  {Short: "o", Long: "restore"},
+	"serve":    {Short: "n", Long: "serve"},
+	"bubble":   {Short: "b", Long: "bubble"},
+	"doctor":   {Short: "d", Long: "doctor"},
 }
 
 var topCommandOrder = []string{
@@ -89,6 +91,7 @@ var topCommandOrder = []string{
 	"version",
 	"apply",
 	"config",
+	"settings",
 	"restore",
 	"serve",
 	"bubble",
@@ -98,6 +101,13 @@ var topCommandOrder = []string{
 var configSubcommandAliases = map[string]commandAlias{
 	"install": {Short: "i", Long: "install"},
 	"inspect": {Short: "x", Long: "inspect"},
+}
+
+var settingsSubcommandAliases = map[string]commandAlias{
+	"list":   {Long: "list"},
+	"set":    {Long: "set"},
+	"toggle": {Long: "toggle"},
+	"reset":  {Long: "reset"},
 }
 
 func newSpinner(msg string) *cliSpinner {
@@ -189,6 +199,11 @@ func topCommandAliasLabel(name string) string {
 func subcommandAliasLabel(parent, name string) string {
 	if parent == "config" {
 		if a, ok := configSubcommandAliases[name]; ok {
+			return aliasLabel(a, name)
+		}
+	}
+	if parent == "settings" {
+		if a, ok := settingsSubcommandAliases[name]; ok {
 			return aliasLabel(a, name)
 		}
 	}
@@ -394,6 +409,12 @@ func rewriteAliasArgs(args []string) []string {
 		}
 	}
 
+	if len(out) >= 3 && out[1] == "settings" {
+		if resolved, ok := resolveCommandAliasToken(out[2], settingsSubcommandAliases); ok {
+			out[2] = resolved
+		}
+	}
+
 	if len(out) >= 3 && out[1] == "help" {
 		if resolved, ok := resolveCommandAliasToken(out[2], topCommandAliases); ok {
 			out[2] = resolved
@@ -406,6 +427,12 @@ func rewriteAliasArgs(args []string) []string {
 		}
 	}
 
+	if len(out) >= 4 && out[1] == "help" && out[2] == "settings" {
+		if resolved, ok := resolveCommandAliasToken(out[3], settingsSubcommandAliases); ok {
+			out[3] = resolved
+		}
+	}
+
 	return out
 }
 
@@ -414,35 +441,6 @@ func enableShortOptionHandling(commands []*cli.Command) {
 		cmd.UseShortOptionHandling = true
 		enableShortOptionHandling(cmd.Subcommands)
 	}
-}
-
-// dirSize returns the total byte size of all files under dir.
-// Returns 0 without error if dir does not exist.
-func dirSize(dir string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		total += info.Size()
-		return nil
-	})
-	return total, err
-}
-
-// formatBytes formats a byte count as a human-readable string.
-func formatBytes(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d B", n)
-	}
-	if n < 1024*1024 {
-		return fmt.Sprintf("%.1f KB", float64(n)/1024)
-	}
-	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 }
 
 // sha256File computes the hex-encoded SHA-256 digest of the file at path.
@@ -690,6 +688,61 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+func splitToolSpec(arg string) (toolID, version string) {
+	toolID = arg
+	if idx := strings.Index(arg, "@"); idx > 0 {
+		toolID = arg[:idx]
+		version = arg[idx+1:]
+	}
+	return toolID, version
+}
+
+func firstInstalledVersion(eng *engine.Engine, toolID string) (string, error) {
+	records, err := eng.InstalledRecords()
+	if err != nil {
+		return "", fmt.Errorf("failed to load installed records: %w", err)
+	}
+	for _, r := range records {
+		if r.ToolID == toolID {
+			return r.Version, nil
+		}
+	}
+	return "", fmt.Errorf("tool %q is not installed", toolID)
+}
+
+func removeToolSpec(eng *engine.Engine, arg string) (string, string, error) {
+	toolID, version := splitToolSpec(arg)
+	if version == "" {
+		resolved, err := firstInstalledVersion(eng, toolID)
+		if err != nil {
+			return toolID, "", err
+		}
+		version = resolved
+	}
+	if err := eng.RemoveTool(toolID, version); err != nil {
+		return toolID, version, err
+	}
+	return toolID, version, nil
+}
+
+func printSettingsGroups(groups []settings.SettingsGroup) {
+	if len(groups) == 0 {
+		fmt.Println("No settings available.")
+		return
+	}
+	for _, group := range groups {
+		fmt.Println(group.Name)
+		for _, s := range group.Settings {
+			value := s.Value
+			if value == "" {
+				value = "(empty)"
+			}
+			fmt.Printf("  %-24s %-8s %s\n", s.ID, value, s.Description)
+		}
+		fmt.Println()
+	}
+}
+
 var toolCommands = []*cli.Command{
 	{
 		Name: "install", Usage: "Install a tool",
@@ -847,18 +900,11 @@ var toolCommands = []*cli.Command{
 	},
 	{
 		Name: "remove", Usage: "Remove a tool",
-		UsageText:   "dpm remove <tool[@version]>",
-		Description: "Remove an installed tool.\n\nExamples:\n  dpm remove binwalk       # remove (auto-detect version)\n  dpm remove binwalk@2.3.4 # remove specific version",
+		UsageText:   "dpm remove <tool[@version]> [tool[@version] ...]",
+		Description: "Remove one or more installed tools.\n\nExamples:\n  dpm remove binwalk       # remove (auto-detect version)\n  dpm remove binwalk@2.3.4 # remove specific version\n  dpm remove nmap jq       # remove multiple tools",
 		Action: func(c *cli.Context) error {
 			if c.Args().Len() < 1 {
 				return fmt.Errorf("specify a tool to remove")
-			}
-			arg := c.Args().First()
-			toolID := arg
-			versionStr := ""
-			if idx := strings.Index(arg, "@"); idx > 0 {
-				toolID = arg[:idx]
-				versionStr = arg[idx+1:]
 			}
 
 			eng, err := newEngine()
@@ -866,39 +912,73 @@ var toolCommands = []*cli.Command{
 				return wrapInitEngineErr(err)
 			}
 
-			// If no version specified, find the installed version from metadata.
-			if versionStr == "" {
-				records, err := eng.InstalledRecords()
+			failed := 0
+			for i := 0; i < c.Args().Len(); i++ {
+				arg := c.Args().Get(i)
+				toolID, version := splitToolSpec(arg)
+				if version == "" {
+					fmt.Printf("Removing %s...\n", toolID)
+				} else {
+					fmt.Printf("Removing %s@%s...\n", toolID, version)
+				}
+				removedID, removedVersion, err := removeToolSpec(eng, arg)
 				if err != nil {
-					return fmt.Errorf("failed to load installed records: %w", err)
+					fmt.Printf("  FAIL  %s: %v\n", arg, err)
+					failed++
+					continue
 				}
-				for _, r := range records {
-					if r.ToolID == toolID {
-						versionStr = r.Version
-						break
-					}
-				}
-				if versionStr == "" {
-					return fmt.Errorf("tool %q is not installed", toolID)
-				}
+				fmt.Printf("  OK    %s@%s\n", removedID, removedVersion)
 			}
-
-			fmt.Printf("Removing %s@%s...\n", toolID, versionStr)
-			if err := eng.RemoveTool(toolID, versionStr); err != nil {
-				return fmt.Errorf("remove failed: %w", err)
+			if failed > 0 {
+				return fmt.Errorf("remove failed for %d item(s)", failed)
 			}
-			fmt.Printf("Removed %s@%s\n", toolID, versionStr)
 			return nil
 		},
 	},
 	{
 		Name: "update", Usage: "Update installed tools to their latest catalog version",
-		UsageText:   "dpm update [tool-id]",
-		Description: "Update one tool or check all installed tools for available updates.\n\nExamples:\n  dpm update           # show update status for all installed tools\n  dpm update nmap      # update nmap to latest catalog version",
+		UsageText:   "dpm update [--all|-a] [tool-id]",
+		Description: "Update one tool, update all outdated tools, or check installed tools for available updates.\n\nExamples:\n  dpm update           # show update status for all installed tools\n  dpm update --all     # update every outdated installed tool\n  dpm update nmap      # update nmap to latest catalog version",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "all", Aliases: []string{"a"}, Usage: "Update every installed tool with an available catalog update"},
+		},
 		Action: func(c *cli.Context) error {
 			eng, err := newEngine()
 			if err != nil {
 				return wrapInitEngineErr(err)
+			}
+			if c.Bool("all") && c.Args().Len() > 0 {
+				return fmt.Errorf("use either 'dpm update --all' or 'dpm update <tool>', not both")
+			}
+
+			if c.Bool("all") {
+				statuses, err := eng.CheckUpdates()
+				if err != nil {
+					return fmt.Errorf("failed to check updates: %w", err)
+				}
+				updated, failed := 0, 0
+				for _, s := range statuses {
+					if !s.UpdateRequired {
+						continue
+					}
+					fmt.Printf("Updating %s (%s → %s)...\n", s.ToolID, s.InstalledVer, s.AvailableVer)
+					if _, err := eng.UpdateTool(s.ToolID); err != nil {
+						fmt.Printf("  FAIL  %s: %v\n", s.ToolID, err)
+						failed++
+						continue
+					}
+					fmt.Printf("  OK    %s@%s\n", s.ToolID, s.AvailableVer)
+					updated++
+				}
+				if updated == 0 && failed == 0 {
+					fmt.Println("All tools are up to date.")
+					return nil
+				}
+				fmt.Printf("\nUpdate complete: %d updated, %d failed\n", updated, failed)
+				if failed > 0 {
+					return fmt.Errorf("update failed for %d tool(s)", failed)
+				}
+				return nil
 			}
 
 			if c.Args().Len() == 0 {
@@ -1320,8 +1400,8 @@ var profileCommands = []*cli.Command{
 	},
 	{
 		Name: "config", Usage: "Manage dotfiles configurations",
-		UsageText:   "dpm config <install|inspect> [options]",
-		Description: "Install, remove, or list dotfiles configurations",
+		UsageText:   "dpm config <install|scan|inspect> [options]",
+		Description: "Install, scan, and inspect dotfiles configurations",
 		Subcommands: []*cli.Command{
 			{
 				Name: "install", Usage: "Install dotfiles from a git repo",
@@ -1389,6 +1469,97 @@ var profileCommands = []*cli.Command{
 				},
 			},
 			{
+				Name: "scan", Usage: "Scan a dotfiles repo for known configs",
+				UsageText:   "dpm config scan [--apply] [--scripts] <repo-or-path>",
+				Description: "Clone or read a dotfiles repo, detect known config files, and optionally apply all detected non-script configs. Scripts are never applied unless --scripts is also set.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "apply", Usage: "Apply all detected non-script configs after scanning"},
+					&cli.BoolFlag{Name: "scripts", Usage: "Include detected install scripts when used with --apply"},
+				},
+				Action: func(c *cli.Context) error {
+					if c.Args().Len() < 1 {
+						return fmt.Errorf("usage: dpm config scan [--apply] [--scripts] <repo-or-path>")
+					}
+					eng, err := newEngine()
+					if err != nil {
+						return wrapInitEngineErr(err)
+					}
+					scan, err := eng.ScanGitDotfiles(c.Args().First())
+					if err != nil {
+						return fmt.Errorf("dotfiles scan failed: %w", err)
+					}
+					if len(scan.Configs) == 0 {
+						fmt.Println("No known dotfile configs detected.")
+						return nil
+					}
+					plan, planErr := eng.PlanImportedDotfiles(scan.RepoDir, scan.Configs)
+					riskBySource := make(map[string]string)
+					issueBySource := make(map[string]string)
+					if planErr == nil {
+						for _, item := range plan.Items {
+							riskBySource[item.Source] = string(item.Risk)
+							if len(item.Issues) > 0 {
+								issueBySource[item.Source] = strings.Join(item.Issues, "; ")
+							}
+						}
+					}
+
+					fmt.Printf("Detected %d config(s) in %s:\n", len(scan.Configs), scan.RepoDir)
+					for _, cfg := range scan.Configs {
+						kind := "config"
+						if cfg.IsScript {
+							kind = "script"
+						}
+						risk := riskBySource[filepath.Join(scan.RepoDir, cfg.Source)]
+						if cfg.IsScript {
+							risk = "high"
+						}
+						if risk == "" {
+							risk = "unknown"
+						}
+						fmt.Printf("  %-8s %-20s %-7s %s -> %s (%s)\n", kind, cfg.Name, risk, cfg.Source, cfg.Target, cfg.MergeStrategy)
+						if issue := issueBySource[filepath.Join(scan.RepoDir, cfg.Source)]; issue != "" {
+							fmt.Printf("  %-8s %-20s         %s\n", "", "", issue)
+						}
+					}
+					if planErr != nil {
+						fmt.Printf("\nPlan warning: %v\n", planErr)
+					} else if plan.Blocked {
+						fmt.Println("\nOne or more configs are blocked by dotfile safety checks and will not be applied.")
+					}
+
+					if !c.Bool("apply") {
+						fmt.Println("\nUse 'dpm config scan --apply <repo>' to apply detected non-script configs.")
+						return nil
+					}
+
+					selected := make([]engine.ScannedDotfileConfig, 0, len(scan.Configs))
+					for _, cfg := range scan.Configs {
+						if cfg.IsScript && !c.Bool("scripts") {
+							continue
+						}
+						if cfg.IsScript {
+							cfg.AllowScript = true
+						}
+						selected = append(selected, cfg)
+					}
+					if len(selected) == 0 {
+						fmt.Println("Nothing selected to apply. Use --scripts to include install scripts.")
+						return nil
+					}
+
+					result, err := eng.ApplyImportedDotfiles(scan.RepoDir, selected)
+					if err != nil {
+						return fmt.Errorf("dotfiles apply failed: %w", err)
+					}
+					fmt.Printf("\nApplied %d config(s):\n", len(result.Applied))
+					for _, path := range result.Applied {
+						fmt.Printf("  %s\n", path)
+					}
+					return nil
+				},
+			},
+			{
 				Name:        "inspect",
 				Usage:       "Inspect a community profile before installing",
 				UsageText:   "dpm config inspect <github-url|search-number> [dotfile]",
@@ -1415,6 +1586,119 @@ var profileCommands = []*cli.Command{
 }
 
 var systemCommands = []*cli.Command{
+	{
+		Name: "settings", Usage: "View and change DPM settings",
+		UsageText:   "dpm settings <list|set|toggle|reset>",
+		Description: "Manage the same persisted settings shown in the TUI settings overlay.",
+		Subcommands: []*cli.Command{
+			{
+				Name:      "list",
+				Usage:     "List current settings",
+				UsageText: "dpm settings list",
+				Action: func(c *cli.Context) error {
+					eng, err := newEngine()
+					if err != nil {
+						return wrapInitEngineErr(err)
+					}
+					mgr := eng.GetSettings()
+					if mgr == nil {
+						return fmt.Errorf("settings manager is not available")
+					}
+					printSettingsGroups(mgr.Groups())
+					return nil
+				},
+			},
+			{
+				Name:      "set",
+				Usage:     "Set a setting value",
+				UsageText: "dpm settings set <id> <value>",
+				Action: func(c *cli.Context) error {
+					if c.Args().Len() < 2 {
+						return fmt.Errorf("usage: dpm settings set <id> <value>")
+					}
+					eng, err := newEngine()
+					if err != nil {
+						return wrapInitEngineErr(err)
+					}
+					mgr := eng.GetSettings()
+					if mgr == nil {
+						return fmt.Errorf("settings manager is not available")
+					}
+					id := c.Args().Get(0)
+					value := c.Args().Get(1)
+					if err := mgr.Set(id, value); err != nil {
+						return err
+					}
+					fmt.Printf("Set %s=%s\n", id, value)
+					return nil
+				},
+			},
+			{
+				Name:      "toggle",
+				Usage:     "Toggle a bool setting",
+				UsageText: "dpm settings toggle <id>",
+				Action: func(c *cli.Context) error {
+					if c.Args().Len() < 1 {
+						return fmt.Errorf("usage: dpm settings toggle <id>")
+					}
+					eng, err := newEngine()
+					if err != nil {
+						return wrapInitEngineErr(err)
+					}
+					mgr := eng.GetSettings()
+					if mgr == nil {
+						return fmt.Errorf("settings manager is not available")
+					}
+					id := c.Args().First()
+					if err := mgr.Toggle(id); err != nil {
+						return err
+					}
+					if s := mgr.Get(id); s != nil {
+						fmt.Printf("Set %s=%s\n", id, s.Value)
+					}
+					return nil
+				},
+			},
+			{
+				Name:      "reset",
+				Usage:     "Reset a setting to its default value",
+				UsageText: "dpm settings reset <id>",
+				Action: func(c *cli.Context) error {
+					if c.Args().Len() < 1 {
+						return fmt.Errorf("usage: dpm settings reset <id>")
+					}
+					eng, err := newEngine()
+					if err != nil {
+						return wrapInitEngineErr(err)
+					}
+					mgr := eng.GetSettings()
+					if mgr == nil {
+						return fmt.Errorf("settings manager is not available")
+					}
+					id := c.Args().First()
+					if err := mgr.Reset(id); err != nil {
+						return err
+					}
+					if s := mgr.Get(id); s != nil {
+						fmt.Printf("Reset %s=%s\n", id, s.Value)
+					}
+					return nil
+				},
+			},
+		},
+		Action: func(c *cli.Context) error {
+			eng, err := newEngine()
+			if err != nil {
+				return wrapInitEngineErr(err)
+			}
+			mgr := eng.GetSettings()
+			if mgr == nil {
+				return fmt.Errorf("settings manager is not available")
+			}
+			printSettingsGroups(mgr.Groups())
+			return nil
+		},
+	},
 	{
 		Name: "restore", Usage: "Remove all DPM-managed tools and reset to a clean state",
 		UsageText:   "dpm restore [--yes|-y]",
@@ -1501,29 +1785,31 @@ var systemCommands = []*cli.Command{
 		UsageText:   "dpm bubble",
 		Description: "Creates a temporary DPM environment under /tmp/dpm-bubble-<id>/.\nAll tools and configs are installed there and removed when you exit.\nUse on shared machines, friend's laptop, or for risk-free testing.",
 		Action: func(c *cli.Context) error {
-			// Create bubble directory.
-			bubbleID := fmt.Sprintf("%d", os.Getpid())
-			bubbleHome := filepath.Join(os.TempDir(), "dpm-bubble-"+bubbleID)
-			if err := os.MkdirAll(bubbleHome, 0o755); err != nil {
-				return fmt.Errorf("failed to create bubble dir: %w", err)
+			eng, err := newEngine()
+			if err != nil {
+				return wrapInitEngineErr(err)
+			}
+			session, err := eng.BubbleStart()
+			if err != nil {
+				return fmt.Errorf("failed to start bubble: %w", err)
 			}
 
-			fmt.Printf("Bubble session started: %s\n", bubbleHome)
-			fmt.Printf("DPM_HOME=%s\n", bubbleHome)
+			fmt.Printf("Bubble session started: %s\n", session.RootPath)
+			fmt.Printf("DPM_HOME=%s\n", session.RootPath)
 			fmt.Println("All tools will be installed here. Type 'exit' to destroy the bubble.")
 			fmt.Println()
 
-			// Set DPM_HOME and launch a new shell.
-			shell := os.Getenv("SHELL")
+			shell := session.Shell
 			if shell == "" {
 				shell = "/bin/sh"
 			}
 
 			cmd := exec.Command(shell)
-			cmd.Env = append(os.Environ(),
-				"DPM_HOME="+bubbleHome,
-				fmt.Sprintf("PS1=[dpm-bubble] %s", os.Getenv("PS1")),
-			)
+			cmd.Dir = session.RootPath
+			cmd.Env = os.Environ()
+			for k, v := range session.Env {
+				cmd.Env = append(cmd.Env, k+"="+v)
+			}
 			cmd.Stdin = os.Stdin
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
@@ -1531,8 +1817,8 @@ var systemCommands = []*cli.Command{
 			cmd.Run() // shell exit code is intentionally ignored
 
 			// Cleanup.
-			fmt.Printf("\nDestroying bubble: %s\n", bubbleHome)
-			if err := os.RemoveAll(bubbleHome); err != nil {
+			fmt.Printf("\nDestroying bubble: %s\n", session.RootPath)
+			if err := eng.BubbleStop(session.RootPath); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to clean up bubble: %v\n", err)
 			} else {
 				fmt.Println("Bubble destroyed. Back to normal.")
@@ -1542,12 +1828,27 @@ var systemCommands = []*cli.Command{
 	},
 	{
 		Name: "doctor", Usage: "Check system health and configuration",
-		UsageText:   "dpm doctor",
+		UsageText:   "dpm doctor [--fix]",
 		Description: "Inspect the real system state: PATH, metadata integrity, and cache usage.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "fix", Usage: "Apply safe automatic fixes, currently PATH setup"},
+		},
 		Action: func(c *cli.Context) error {
 			eng, err := newEngine()
 			if err != nil {
 				return wrapInitEngineErr(err)
+			}
+			if c.Bool("fix") && !eng.IsInPATH() {
+				if err := eng.AddToPATH(); err != nil {
+					return fmt.Errorf("failed to add ~/.dpm/bin to PATH: %w", err)
+				}
+				fmt.Println("Added ~/.dpm/bin to your shell PATH config. Restart your shell to use it.")
+				fmt.Println()
+			}
+
+			report, err := eng.Doctor()
+			if err != nil {
+				return fmt.Errorf("doctor failed: %w", err)
 			}
 
 			fmt.Println("DPM System Health Check")
@@ -1555,51 +1856,15 @@ var systemCommands = []*cli.Command{
 			fmt.Println()
 
 			warnings := 0
-			check := func(ok bool, okMsg, warnMsg string) {
-				if ok {
-					fmt.Printf("  ✓  %s\n", okMsg)
+			fmt.Printf("  ✓  Platform: %s\n", report.Platform)
+			for _, check := range report.Checks {
+				if check.OK {
+					fmt.Printf("  ✓  %s: %s\n", check.Name, check.Message)
 				} else {
-					fmt.Printf("  ⚠  %s\n", warnMsg)
+					fmt.Printf("  ⚠  %s: %s\n", check.Name, check.Message)
 					warnings++
 				}
 			}
-
-			// 1. Platform detection.
-			fmt.Printf("  ✓  Platform: %s\n", eng.Platform())
-
-			// 2. ~/.dpm/bin in PATH.
-			check(eng.IsInPATH(),
-				"~/.dpm/bin is in PATH",
-				"~/.dpm/bin is NOT in PATH — run 'dpm install <tool>' to add it automatically")
-
-			// 3. Metadata integrity: ensure all recorded install dirs exist.
-			records, err := eng.InstalledRecords()
-			if err != nil {
-				fmt.Printf("  ⚠  metadata: could not load (%v)\n", err)
-				warnings++
-			} else {
-				orphans := 0
-				for _, r := range records {
-					if r.InstallDir != "" {
-						if _, err := os.Stat(r.InstallDir); os.IsNotExist(err) {
-							orphans++
-						}
-					}
-				}
-				check(orphans == 0,
-					fmt.Sprintf("metadata OK (%d tool(s) installed)", len(records)),
-					fmt.Sprintf("metadata has %d orphaned record(s) — install dirs missing (run 'dpm list' to review)", orphans))
-			}
-
-			// 4. Cache size.
-			dpmRoot := eng.GetDPMRoot()
-			cacheDir := filepath.Join(dpmRoot, "cache")
-			cacheSize, _ := dirSize(cacheDir)
-			fmt.Printf("  ✓  Cache: %s (%s)\n", cacheDir, formatBytes(cacheSize))
-
-			// 5. Git available (needed for dotfiles).
-			_, gitErr := exec.LookPath("git")
-			check(gitErr == nil, "git is available", "git not found in PATH (required for dotfiles)")
 
 			fmt.Println()
 			if warnings == 0 {
@@ -1631,7 +1896,7 @@ func launchTUI() error {
 
 	self, _ := os.Executable()
 	cmd := exec.Command(tuiBin)
-	cmd.Env = append(os.Environ(), "DPM_BIN="+self)
+	cmd.Env = append(os.Environ(), "DPM_BIN="+self, "DPM_VERSION="+version)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
