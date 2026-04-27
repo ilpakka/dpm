@@ -26,7 +26,7 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-var version = "v0.5.2"
+var version = "v0.5.3"
 
 const (
 	commandSummaryFormat = "   %-18s %s\n"
@@ -74,8 +74,9 @@ var topCommandAliases = map[string]commandAlias{
 	"apply":    {Short: "a", Long: "apply"},
 	"config":   {Short: "c", Long: "config"},
 	"settings": {Long: "settings"},
-	"restore":  {Short: "o", Long: "restore"},
-	"serve":    {Short: "n", Long: "serve"},
+	"restore":   {Short: "o", Long: "restore"},
+	"uninstall": {Long: "uninstall"},
+	"serve":     {Short: "n", Long: "serve"},
 	"bubble":   {Short: "b", Long: "bubble"},
 	"doctor":   {Short: "d", Long: "doctor"},
 }
@@ -93,6 +94,7 @@ var topCommandOrder = []string{
 	"config",
 	"settings",
 	"restore",
+	"uninstall",
 	"serve",
 	"bubble",
 	"doctor",
@@ -937,12 +939,19 @@ var toolCommands = []*cli.Command{
 	},
 	{
 		Name: "update", Usage: "Update installed tools to their latest catalog version",
-		UsageText:   "dpm update [--all|-a] [tool-id]",
-		Description: "Update one tool, update all outdated tools, or check installed tools for available updates.\n\nExamples:\n  dpm update           # show update status for all installed tools\n  dpm update --all     # update every outdated installed tool\n  dpm update nmap      # update nmap to latest catalog version",
+		UsageText:   "dpm update [--all|-a] [--self] [tool-id]",
+		Description: "Update one tool, update all outdated tools, or check installed tools for available updates.\n\n--self updates the dpm and dpm-tui binaries themselves via the dpm.fi installer.\n\nExamples:\n  dpm update           # show update status for all installed tools\n  dpm update --all     # update every outdated installed tool\n  dpm update nmap      # update nmap to latest catalog version\n  dpm update --self    # update dpm + dpm-tui to the latest GitHub release",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "all", Aliases: []string{"a"}, Usage: "Update every installed tool with an available catalog update"},
+			&cli.BoolFlag{Name: "self", Usage: "Update dpm and dpm-tui binaries via dpm.fi/install.sh"},
 		},
 		Action: func(c *cli.Context) error {
+			if c.Bool("self") {
+				if c.Bool("all") || c.Args().Len() > 0 {
+					return fmt.Errorf("--self cannot be combined with --all or a tool argument")
+				}
+				return runSelfUpdate()
+			}
 			eng, err := newEngine()
 			if err != nil {
 				return wrapInitEngineErr(err)
@@ -1752,6 +1761,80 @@ var systemCommands = []*cli.Command{
 		},
 	},
 	{
+		Name: "uninstall", Usage: "Completely remove DPM, all installed tools, and dpm + dpm-tui binaries",
+		UsageText:   "dpm uninstall [--yes|-y]",
+		Description: "Full uninstall: removes every DPM-managed tool, ~/.dpm/, ~/.cache/dpm/, the dpm binary itself, and the dpm-tui binary.\n\nDotfile backups (*.dpm-backup-*) are kept — they contain your original configs.\nThe PATH addition in your shell rc is NOT removed automatically; do it by hand if you want.\n\nUse 'dpm restore' if you only want to remove installed tools but keep DPM itself.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Skip confirmation prompt"},
+		},
+		Action: func(c *cli.Context) error {
+			if !c.Bool("yes") {
+				fmt.Println("This will completely remove DPM:")
+				fmt.Println("  • every tool DPM installed")
+				fmt.Println("  • ~/.dpm/ (metadata, tools, dotfile snapshots, settings)")
+				fmt.Println("  • ~/.cache/dpm/ (bootstrap cache)")
+				fmt.Println("  • the dpm and dpm-tui binaries themselves")
+				fmt.Println("Dotfile backups (*.dpm-backup-*) are kept.")
+				fmt.Print("Continue? [y/N] ")
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "y" && answer != "Y" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			eng, err := newEngine()
+			if err != nil {
+				log.Printf("uninstall: engine init failed (%v) — proceeding with file removal anyway", err)
+			} else {
+				fmt.Println("Removing installed tools...")
+				if result, restoreErr := eng.Restore(); restoreErr != nil {
+					fmt.Printf("  ⚠ restore failed: %v (continuing)\n", restoreErr)
+				} else if len(result.RemovedTools) > 0 {
+					fmt.Printf("  ✓ removed %d tool(s)\n", len(result.RemovedTools))
+				}
+			}
+
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("uninstall: get home dir: %w", err)
+			}
+
+			toRemove := []string{
+				filepath.Join(home, ".dpm"),
+				filepath.Join(home, ".cache", "dpm"),
+			}
+			tuiBin := findTUIBinary()
+			selfBin, _ := os.Executable()
+			for _, p := range toRemove {
+				if _, err := os.Stat(p); err != nil {
+					continue
+				}
+				if err := os.RemoveAll(p); err != nil {
+					fmt.Printf("  ⚠ %s: %v\n", p, err)
+					continue
+				}
+				fmt.Printf("  ✓ removed %s\n", p)
+			}
+			for _, bin := range []string{tuiBin, selfBin} {
+				if bin == "" {
+					continue
+				}
+				if err := os.Remove(bin); err != nil && !os.IsNotExist(err) {
+					fmt.Printf("  ⚠ %s: %v\n", bin, err)
+					continue
+				}
+				fmt.Printf("  ✓ removed %s\n", bin)
+			}
+
+			fmt.Println("\nDPM has been uninstalled.")
+			fmt.Println("If you added ~/.dpm/bin or ~/.local/bin to PATH in your shell rc,")
+			fmt.Println("you may want to remove those lines manually.")
+			return nil
+		},
+	},
+	{
 		Name: "serve", Usage: "Run the JSON-RPC backend over stdio (used by dpm-tui)",
 		UsageText: "dpm serve --stdio",
 		Description: "Expose the DPM engine as a JSON-RPC 2.0 NDJSON server.\n" +
@@ -1886,6 +1969,23 @@ func buildAppCommands() []*cli.Command {
 	commands = append(commands, profileCommands...)
 	commands = append(commands, systemCommands...)
 	return commands
+}
+
+// runSelfUpdate downloads and runs the dpm.fi installer to update the dpm and
+// dpm-tui binaries to the latest GitHub release. The installer handles atomic
+// replacement and SHA256 verification — we just hand it stdio.
+func runSelfUpdate() error {
+	const installerURL = "https://dpm.fi/install.sh"
+	fmt.Printf("Updating DPM via %s...\n\n", installerURL)
+	cmd := exec.Command("sh", "-c", "curl -fsSL "+installerURL+" | sh")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("self-update failed: %w", err)
+	}
+	fmt.Println("\nSelf-update complete. Run 'dpm version' to confirm.")
+	return nil
 }
 
 func launchTUI() error {
